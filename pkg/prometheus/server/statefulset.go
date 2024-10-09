@@ -287,6 +287,17 @@ func makeStatefulSetSpec(
 		promArgs = append(promArgs, monitoringv1.Argument{Name: "storage.tsdb.min-block-duration", Value: thanosBlockDuration})
 	}
 
+	// ref: https://github.com/prometheus-operator/prometheus-operator/issues/6829
+	// automatically set --no-storage.tsdb.allow-overlapping-compaction when all the conditions are met:
+	//   1. Prometheus >= v2.55.0
+	//   2. Thanos sidecar configured for uploading blocks to object storage
+	//   3. out-of-order window is > 0
+	if cpf.TSDB != nil && cpf.TSDB.OutOfOrderTimeWindow != nil &&
+		compactionDisabled(p) &&
+		cg.WithMinimumVersion("2.55.0").IsCompatible() {
+		promArgs = append(promArgs, monitoringv1.Argument{Name: "storage.tsdb.allow-overlapping-compaction"})
+	}
+
 	var watchedDirectories []string
 
 	if len(ruleConfigMapNames) != 0 {
@@ -326,6 +337,12 @@ func makeStatefulSetSpec(
 		return nil, err
 	}
 
+	var envVars []v1.EnvVar
+	// For higher Prometheus version its set with runtime field in configuration
+	if p.Spec.Runtime != nil && p.Spec.Runtime.GoGC != nil && !cg.WithMinimumVersion("2.53.0").IsCompatible() {
+		envVars = append(envVars, v1.EnvVar{Name: "GOGC", Value: fmt.Sprintf("%d", *p.Spec.Runtime.GoGC)})
+	}
+
 	operatorContainers := append([]v1.Container{
 		{
 			Name:                     "prometheus",
@@ -333,6 +350,7 @@ func makeStatefulSetSpec(
 			ImagePullPolicy:          cpf.ImagePullPolicy,
 			Ports:                    prompkg.MakeContainerPorts(cpf),
 			Args:                     containerArgs,
+			Env:                      envVars,
 			VolumeMounts:             promVolumeMounts,
 			StartupProbe:             startupProbe,
 			LivenessProbe:            livenessProbe,
@@ -399,6 +417,8 @@ func makeStatefulSetSpec(
 				TopologySpreadConstraints:     prompkg.MakeK8sTopologySpreadConstraint(finalSelectorLabels, cpf.TopologySpreadConstraints),
 				HostAliases:                   operator.MakeHostAliases(cpf.HostAliases),
 				HostNetwork:                   cpf.HostNetwork,
+				DNSPolicy:                     k8sutil.ConvertDNSPolicy(cpf.DNSPolicy),
+				DNSConfig:                     k8sutil.ConvertToK8sDNSConfig(cpf.DNSConfig),
 			},
 		},
 	}, nil

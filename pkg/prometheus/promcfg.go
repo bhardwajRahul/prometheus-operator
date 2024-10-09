@@ -767,6 +767,8 @@ func (cg *ConfigGenerator) GenerateServerConfiguration(
 	globalItems = cg.appendScrapeLimits(globalItems)
 	cfg = append(cfg, yaml.MapItem{Key: "global", Value: globalItems})
 
+	// Runtime config
+	cfg = cg.appendRuntime(cfg, p.Spec.Runtime)
 	// Rule Files config
 	cfg = cg.appendRuleFiles(cfg, ruleConfigMapNames, p.Spec.RuleSelector)
 
@@ -854,11 +856,11 @@ func (cg *ConfigGenerator) appendStorageSettingsConfig(cfg yaml.MapSlice, exempl
 		})
 	}
 
-	if tsdb != nil && tsdb.OutOfOrderTimeWindow != "" {
+	if tsdb != nil && tsdb.OutOfOrderTimeWindow != nil {
 		storage = cg.WithMinimumVersion("2.39.0").AppendMapItem(storage, "tsdb", yaml.MapSlice{
 			{
 				Key:   "out_of_order_time_window",
-				Value: tsdb.OutOfOrderTimeWindow,
+				Value: *tsdb.OutOfOrderTimeWindow,
 			},
 		})
 	}
@@ -2401,6 +2403,19 @@ func (cg *ConfigGenerator) appendScrapeProtocols(slice yaml.MapSlice) yaml.MapSl
 	return cg.WithMinimumVersion("2.49.0").AppendMapItem(slice, "scrape_protocols", cpf.ScrapeProtocols)
 }
 
+func (cg *ConfigGenerator) appendRuntime(slice yaml.MapSlice, runtime *monitoringv1.RuntimeConfig) yaml.MapSlice {
+	if runtime == nil || !cg.WithMinimumVersion("2.53.0").IsCompatible() {
+		return slice
+	}
+
+	var runtimeSlice yaml.MapSlice
+	if runtime.GoGC != nil {
+		runtimeSlice = cg.AppendMapItem(runtimeSlice, "gogc", *runtime.GoGC)
+	}
+
+	return cg.AppendMapItem(slice, "runtime", runtimeSlice)
+}
+
 func (cg *ConfigGenerator) appendEvaluationInterval(slice yaml.MapSlice, evaluationInterval monitoringv1.Duration) yaml.MapSlice {
 	return append(slice, yaml.MapItem{Key: "evaluation_interval", Value: evaluationInterval})
 }
@@ -2639,13 +2654,14 @@ func (cg *ConfigGenerator) GenerateAgentConfiguration(
 		Value: scrapeConfigs,
 	})
 
+	// TSDB
 	tsdb := cpf.TSDB
-	if tsdb != nil && tsdb.OutOfOrderTimeWindow != "" {
+	if tsdb != nil && tsdb.OutOfOrderTimeWindow != nil {
 		var storage yaml.MapSlice
 		storage = cg.AppendMapItem(storage, "tsdb", yaml.MapSlice{
 			{
 				Key:   "out_of_order_time_window",
-				Value: tsdb.OutOfOrderTimeWindow,
+				Value: *tsdb.OutOfOrderTimeWindow,
 			},
 		})
 		cfg = cg.WithMinimumVersion("2.54.0").AppendMapItem(cfg, "storage", storage)

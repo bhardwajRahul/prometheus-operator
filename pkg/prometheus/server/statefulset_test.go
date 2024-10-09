@@ -1565,6 +1565,73 @@ func TestTSDBAllowOverlappingBlocks(t *testing.T) {
 	}
 }
 
+func TestTSDBAllowOverlappingCompaction(t *testing.T) {
+	expectedArg := "--storage.tsdb.allow-overlapping-compaction"
+	tests := []struct {
+		name                    string
+		version                 string
+		outOfOrderTimeWindow    monitoringv1.Duration
+		objectStorageConfigFile *string
+		shouldContain           bool
+	}{
+		{
+			name:          "Prometheus version less than or equal to v2.55.0",
+			version:       "v2.54.0",
+			shouldContain: false,
+		},
+		{
+			name:          "outOfOrderTimeWindow equal to 0s",
+			version:       "v2.55.0",
+			shouldContain: false,
+		},
+		{
+			name:                    "Thanos is not object storage",
+			version:                 "v2.55.0",
+			outOfOrderTimeWindow:    "1s",
+			objectStorageConfigFile: nil,
+			shouldContain:           false,
+		},
+		{
+			name:                    "Verify AllowOverlappingCompaction",
+			version:                 "v2.55.0",
+			outOfOrderTimeWindow:    "1s",
+			objectStorageConfigFile: ptr.To("/etc/thanos.cfg"),
+			shouldContain:           true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sset, err := makeStatefulSetFromPrometheus(monitoringv1.Prometheus{
+				Spec: monitoringv1.PrometheusSpec{
+					CommonPrometheusFields: monitoringv1.CommonPrometheusFields{
+						Version: test.version,
+						TSDB: &monitoringv1.TSDBSpec{
+							OutOfOrderTimeWindow: ptr.To(test.outOfOrderTimeWindow),
+						},
+					},
+					Thanos: &monitoringv1.ThanosSpec{
+						ListenLocal:             true,
+						ObjectStorageConfigFile: test.objectStorageConfigFile,
+					},
+				},
+			})
+			require.NoError(t, err)
+
+			promArgs := sset.Spec.Template.Spec.Containers[0].Args
+			found := false
+			for _, flag := range promArgs {
+				if flag == expectedArg {
+					found = true
+					break
+				}
+			}
+
+			require.Equal(t, test.shouldContain, found)
+		})
+	}
+}
+
 func TestThanosListenLocal(t *testing.T) {
 	for _, tc := range []struct {
 		spec     monitoringv1.ThanosSpec
@@ -2237,6 +2304,60 @@ func TestPrometheusAdditionalArgsDuplicate(t *testing.T) {
 	require.Contains(t, err.Error(), expectedErrorMsg, "expected the following text to be present in the error msg: %s", expectedErrorMsg)
 }
 
+func TestRuntimeGOGCEnvVar(t *testing.T) {
+	for _, tc := range []struct {
+		scenario       string
+		version        string
+		gogc           *int32
+		expectedEnvVar bool
+	}{
+		{
+			scenario:       "Prometheus < 2.53.0",
+			version:        "v2.51.2",
+			gogc:           ptr.To(int32(50)),
+			expectedEnvVar: true,
+		},
+		{
+			scenario:       "Prometheus > 2.53.0",
+			version:        "v2.54.0",
+			gogc:           ptr.To(int32(50)),
+			expectedEnvVar: false,
+		},
+	} {
+		t.Run(fmt.Sprintf("case %s", tc.scenario), func(t *testing.T) {
+			ss, err := makeStatefulSetFromPrometheus(monitoringv1.Prometheus{
+				Spec: monitoringv1.PrometheusSpec{
+					CommonPrometheusFields: monitoringv1.CommonPrometheusFields{
+						Version: tc.version,
+					},
+					Runtime: &monitoringv1.RuntimeConfig{
+						GoGC: tc.gogc,
+					},
+				},
+			})
+
+			var containsEnvVar bool
+			for _, env := range ss.Spec.Template.Spec.Containers[0].Env {
+				if env.Name == "GOGC" {
+					if env.Value == fmt.Sprintf("%d", *tc.gogc) {
+						containsEnvVar = true
+						break
+					}
+				}
+			}
+
+			require.NoError(t, err)
+			if tc.expectedEnvVar {
+				require.True(t, containsEnvVar, "Prometheus is missing expected GOGC env var with correct value")
+			}
+
+			if !tc.expectedEnvVar {
+				require.False(t, containsEnvVar, "Prometheus didn't expect GOGC env var for this version of Prometheus")
+			}
+		})
+	}
+}
+
 func TestPrometheusAdditionalBinaryArgsDuplicate(t *testing.T) {
 	expectedErrorMsg := "can't set arguments which are already managed by the operator: web.enable-lifecycle"
 
@@ -2826,6 +2947,89 @@ func TestAutomountServiceAccountToken(t *testing.T) {
 			require.NotNil(t, sset.Spec.Template.Spec.AutomountServiceAccountToken, "expected automountServiceAccountToken to be set")
 
 			require.Equal(t, tc.expectedValue, *sset.Spec.Template.Spec.AutomountServiceAccountToken, "expected automountServiceAccountToken to be %v", tc.expectedValue)
+		})
+	}
+}
+
+func TestDNSPolicyAndDNSConfig(t *testing.T) {
+	tests := []struct {
+		name              string
+		dnsPolicy         v1.DNSPolicy
+		dnsConfig         *v1.PodDNSConfig
+		expectedDNSPolicy v1.DNSPolicy
+		expectedDNSConfig *v1.PodDNSConfig
+	}{
+		{
+			name:              "Default DNSPolicy and DNSConfig",
+			dnsPolicy:         v1.DNSClusterFirst,
+			dnsConfig:         nil,
+			expectedDNSPolicy: v1.DNSClusterFirst,
+			expectedDNSConfig: nil,
+		},
+		{
+			name:              "Custom DNSPolicy",
+			dnsPolicy:         v1.DNSDefault,
+			dnsConfig:         nil,
+			expectedDNSPolicy: v1.DNSDefault,
+			expectedDNSConfig: nil,
+		},
+		{
+			name:      "Custom DNSConfig",
+			dnsPolicy: v1.DNSClusterFirst,
+			dnsConfig: &v1.PodDNSConfig{
+				Nameservers: []string{"8.8.8.8", "8.8.4.4"},
+				Searches:    []string{"custom.svc.cluster.local"},
+			},
+			expectedDNSPolicy: v1.DNSClusterFirst,
+			expectedDNSConfig: &v1.PodDNSConfig{
+				Nameservers: []string{"8.8.8.8", "8.8.4.4"},
+				Searches:    []string{"custom.svc.cluster.local"},
+			},
+		},
+		{
+			name:      "Custom DNS Policy with Search Domains",
+			dnsPolicy: v1.DNSDefault,
+			dnsConfig: &v1.PodDNSConfig{
+				Searches: []string{"kitsos.com", "kitsos.org"},
+			},
+			expectedDNSPolicy: v1.DNSDefault,
+			expectedDNSConfig: &v1.PodDNSConfig{
+				Searches: []string{"kitsos.com", "kitsos.org"},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			monitoringDNSPolicyPtr := ptr.To(monitoringv1.DNSPolicy(test.dnsPolicy))
+
+			var monitoringDNSConfig *monitoringv1.PodDNSConfig
+			if test.dnsConfig != nil {
+				monitoringDNSConfig = &monitoringv1.PodDNSConfig{
+					Nameservers: test.dnsConfig.Nameservers,
+					Searches:    test.dnsConfig.Searches,
+				}
+			}
+
+			sset, err := makeStatefulSetFromPrometheus(monitoringv1.Prometheus{
+				ObjectMeta: metav1.ObjectMeta{},
+				Spec: monitoringv1.PrometheusSpec{
+					CommonPrometheusFields: monitoringv1.CommonPrometheusFields{
+						DNSPolicy: monitoringDNSPolicyPtr,
+						DNSConfig: monitoringDNSConfig,
+					},
+				},
+			})
+			require.NoError(t, err)
+
+			require.Equal(t, test.expectedDNSPolicy, sset.Spec.Template.Spec.DNSPolicy, "expected DNSPolicy to match, want %v, got %v", test.expectedDNSPolicy, sset.Spec.Template.Spec.DNSPolicy)
+			if test.expectedDNSConfig != nil {
+				require.NotNil(t, sset.Spec.Template.Spec.DNSConfig, "expected DNSConfig to be set")
+				require.Equal(t, test.expectedDNSConfig.Nameservers, sset.Spec.Template.Spec.DNSConfig.Nameservers, "expected DNSConfig Nameservers to match, want %v, got %v", test.expectedDNSConfig.Nameservers, sset.Spec.Template.Spec.DNSConfig.Nameservers)
+				require.Equal(t, test.expectedDNSConfig.Searches, sset.Spec.Template.Spec.DNSConfig.Searches, "expected DNSConfig Searches to match, want %v, got %v", test.expectedDNSConfig.Searches, sset.Spec.Template.Spec.DNSConfig.Searches)
+			} else {
+				require.Nil(t, sset.Spec.Template.Spec.DNSConfig, "expected DNSConfig to be nil")
+			}
 		})
 	}
 }

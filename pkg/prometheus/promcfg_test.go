@@ -4992,6 +4992,59 @@ func TestPodMonitorEndpointEnableHttp2(t *testing.T) {
 	}
 }
 
+func TestRuntimeConfig(t *testing.T) {
+	for _, tc := range []struct {
+		Scenario string
+		Version  string
+		Runtime  *monitoringv1.RuntimeConfig
+		Golden   string
+	}{
+		{
+			Scenario: "Runtime GoGC is set to 25",
+			Version:  "v2.53.0",
+			Runtime: &monitoringv1.RuntimeConfig{
+				GoGC: ptr.To(int32(25)),
+			},
+			Golden: "RuntimeConfig_GoGC25.golden",
+		},
+		{
+			Scenario: "Runtime GoGC is set to 25 but unsupported Prometheus Version",
+			Version:  "v2.52.0",
+			Runtime: &monitoringv1.RuntimeConfig{
+				GoGC: ptr.To(int32(25)),
+			},
+			Golden: "RuntimeConfig_GoGC_Not_Set.golden",
+		},
+		{
+			Scenario: "Runtime GoGC not specified",
+			Golden:   "RuntimeConfig_GoGC_Not_Set.golden",
+		},
+	} {
+		t.Run(fmt.Sprintf("case %s", tc.Scenario), func(t *testing.T) {
+			p := defaultPrometheus()
+			if tc.Version != "" {
+				p.Spec.CommonPrometheusFields.Version = tc.Version
+			}
+			p.Spec.Runtime = tc.Runtime
+			cg := mustNewConfigGenerator(t, p)
+			cfg, err := cg.GenerateServerConfiguration(
+				p,
+				nil,
+				nil,
+				nil,
+				nil,
+				&assets.StoreBuilder{},
+				nil,
+				nil,
+				nil,
+				nil,
+			)
+			require.NoError(t, err)
+			golden.Assert(t, string(cfg), tc.Golden)
+		})
+	}
+}
+
 func TestStorageSettingMaxExemplars(t *testing.T) {
 	for _, tc := range []struct {
 		Scenario  string
@@ -5063,7 +5116,7 @@ func TestTSDBConfig(t *testing.T) {
 			name:    "TSDB config < v2.39.0",
 			version: "v2.38.0",
 			tsdb: &monitoringv1.TSDBSpec{
-				OutOfOrderTimeWindow: monitoringv1.Duration("10m"),
+				OutOfOrderTimeWindow: ptr.To(monitoringv1.Duration("10m")),
 			},
 			golden: "TSDB_config_less_than_v2.39.0.golden",
 		},
@@ -5071,7 +5124,7 @@ func TestTSDBConfig(t *testing.T) {
 
 			name: "TSDB config >= v2.39.0",
 			tsdb: &monitoringv1.TSDBSpec{
-				OutOfOrderTimeWindow: monitoringv1.Duration("10m"),
+				OutOfOrderTimeWindow: ptr.To(monitoringv1.Duration("10m")),
 			},
 			golden: "TSDB_config_greater_than_or_equal_to_v2.39.0.golden",
 		},
@@ -5120,7 +5173,7 @@ func TestTSDBConfigPrometheusAgent(t *testing.T) {
 			name:    "PrometheusAgent TSDB config < v2.54.0",
 			version: "v2.53.0",
 			tsdb: &monitoringv1.TSDBSpec{
-				OutOfOrderTimeWindow: monitoringv1.Duration("10m"),
+				OutOfOrderTimeWindow: ptr.To(monitoringv1.Duration("10m")),
 			},
 			golden: "PrometheusAgent_TSDB_config_less_than_v2.53.0.golden",
 		},
@@ -5129,7 +5182,7 @@ func TestTSDBConfigPrometheusAgent(t *testing.T) {
 			name:    "PrometheusAgent TSDB config >= v2.54.0",
 			version: "v2.54.0",
 			tsdb: &monitoringv1.TSDBSpec{
-				OutOfOrderTimeWindow: monitoringv1.Duration("10m"),
+				OutOfOrderTimeWindow: ptr.To(monitoringv1.Duration("10m")),
 			},
 			golden: "PrometheusAgent_TSDB_config_greater_than_or_equal_to_v2.54.0.golden",
 		},
@@ -5406,7 +5459,7 @@ func TestScrapeConfigSpecConfig(t *testing.T) {
 				StaticConfigs: []monitoringv1alpha1.StaticConfig{
 					{
 						Targets: []monitoringv1alpha1.Target{"http://localhost:9100"},
-						Labels: map[monitoringv1.LabelName]string{
+						Labels: map[string]string{
 							"label1": "value1",
 						},
 					},
@@ -5423,7 +5476,7 @@ func TestScrapeConfigSpecConfig(t *testing.T) {
 				StaticConfigs: []monitoringv1alpha1.StaticConfig{
 					{
 						Targets: []monitoringv1alpha1.Target{"http://localhost:9100"},
-						Labels: map[monitoringv1.LabelName]string{
+						Labels: map[string]string{
 							"label1": "value1_sharded",
 						},
 					},
@@ -5450,7 +5503,7 @@ func TestScrapeConfigSpecConfig(t *testing.T) {
 				StaticConfigs: []monitoringv1alpha1.StaticConfig{
 					{
 						Targets: []monitoringv1alpha1.Target{"http://localhost:9100"},
-						Labels: map[monitoringv1.LabelName]string{
+						Labels: map[string]string{
 							"label1": "value1",
 						},
 					},

@@ -5441,6 +5441,12 @@ object process all incoming alerts.</p>
 AlertmanagerConfig object only process alerts that have a <code>namespace</code>
 label equal to the namespace of the object.</p>
 </td>
+</tr><tr><td><p>&#34;OnNamespaceExceptForAlertmanagerNamespace&#34;</p></td>
+<td><p>With <code>OnNamespaceExceptForAlertmanagerNamespace</code>, the route and inhibition rules of an
+AlertmanagerConfig object only process alerts that have a <code>namespace</code>
+label equal to the namespace of the object, unless the AlertmanagerConfig object
+is in the same namespace as the Alertmanager object, where it will process all alerts.</p>
+</td>
 </tr></tbody>
 </table>
 <h3 id="monitoring.coreos.com/v1.AlertmanagerConfiguration">AlertmanagerConfiguration
@@ -25749,6 +25755,19 @@ Duration
 <td>
 <em>(Optional)</em>
 <p>The time after which the servers are refreshed.</p>
+</td>
+</tr>
+<tr>
+<td>
+<code>labelSelector</code><br/>
+<em>
+string
+</em>
+</td>
+<td>
+<em>(Optional)</em>
+<p>Label selector used to filter the servers when fetching them from the API.
+It requires Prometheus &gt;= v3.5.0.</p>
 </td>
 </tr>
 </tbody>
